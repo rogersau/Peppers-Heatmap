@@ -2,6 +2,8 @@
 
 This ASP.NET Core API generates heatmap images from DayZ server admin log (`.ADM`) files. It can produce both smooth heatmaps and grid-based pixel maps, with options for weighting different types of death events.
 
+Inspired by the work done in [SumrakDZN/DeathMap](https://github.com/SumrakDZN/DeathMap).
+
 ## Features
 
 *   Processes DayZ `.ADM` log files to extract death/kill event positions.
