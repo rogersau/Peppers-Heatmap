@@ -9,9 +9,17 @@ namespace HeatMapAPI.Models
         
         [JsonConverter(typeof(Base64ImageConverter))]
         public byte[] ImageData { get; set; } = Array.Empty<byte>();
-        
-        public int TotalDeaths { get; set; }
-        public int OutOfBoundsDeaths { get; set; }
+
+        // Metadata fields
+        public int ZombieDeaths { get; set; }
+        public int MeleeDeaths { get; set; }
+        public int GunDeaths { get; set; }
+        public int SuicidesOrOtherDeaths { get; set; }
+        public float FurthestKillDistance { get; set; }
+        public int TotalDeaths { get; set; } // This will be calculated sum
+        public int PositionsOutOfBounds { get; set; } // Renamed for clarity
+        public int LinesProcessed { get; set; }
+
         public bool Success { get; set; }
         public string? ErrorMessage { get; set; }
     }

@@ -46,25 +46,25 @@ namespace HeatMapAPI.Controllers
         }
         
         [HttpPost("generateWithMetadata")]
-        [ProducesResponseType(StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(HeatmapResponse))]
+        [ProducesResponseType(StatusCodes.Status400BadRequest, Type = typeof(HeatmapResponse))]
         public async Task<ActionResult<HeatmapResponse>> GenerateHeatmapWithMetadata([FromForm] HeatmapRequest request)
         {
             if (request == null)
             {
-                return BadRequest("Request cannot be null");
+                return BadRequest(new HeatmapResponse { Success = false, ErrorMessage = "Request cannot be null" });
             }
 
             if (request.AdminLogFiles == null || request.AdminLogFiles.Count == 0)
             {
-                return BadRequest("Admin log files must be provided");
+                return BadRequest(new HeatmapResponse { Success = false, ErrorMessage = "Admin log files must be provided" });
             }
 
             HeatmapResponse response = await _deathMapService.GenerateHeatmapFromFilesAsync(
-                request.AdminLogFiles, 
+                request.AdminLogFiles,
                 request.Configuration
             );
-            
+
             return response.Success ? Ok(response) : BadRequest(response);
         }
     }

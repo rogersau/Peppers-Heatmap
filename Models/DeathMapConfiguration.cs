@@ -35,6 +35,12 @@ namespace HeatMapAPI.Models
         /// </summary>
         [DefaultValue(false)]
         public bool UseWeighting { get; set; } = false;
+
+        /// <summary>
+        /// Filters the type of content to include in the heatmap. Options: "all", "infected", "pvp". Defaults to "all".
+        /// </summary>
+        [DefaultValue("all")]
+        public string OutputContent { get; set; } = "all";
     }
 
     /// <summary>

@@ -80,17 +80,7 @@ namespace HeatMapAPI.Services
                 }
             }
 
-            List<DeathPosition> positions = new List<DeathPosition>();
-            int totalActualDeaths = 0;
-            int outOfBoundsPositions = 0;
-
-            var fileProcessor = _fileProcessingService as FileProcessingService;
-            if (fileProcessor == null)
-            {
-                _logger.LogError("Could not cast IFileProcessingService to FileProcessingService to access internal methods.");
-                return new HeatmapResponse { Success = false, ErrorMessage = "Internal server error during file processing setup." };
-            }
-
+            var aggregatedResult = new AdminLogProcessingResult();
             foreach (var file in files)
             {
                 if (file.FileName.EndsWith(".ADM", StringComparison.OrdinalIgnoreCase))
@@ -98,38 +88,18 @@ namespace HeatMapAPI.Services
                     try
                     {
                         using var stream = file.OpenReadStream();
-                        using var streamReader = new StreamReader(stream);
-                        string? line;
-                        int fileDeaths = 0;
-                        List<DeathPosition> filePositions = new List<DeathPosition>();
+                        var fileResult = await _fileProcessingService.ProcessAdminLogFileAsync(stream, resolvedMapSize, config.OutputContent ?? "all");
 
-                        while ((line = await streamReader.ReadLineAsync()) != null)
-                        {
-                            if (fileProcessor.IsActualDeathEvent(line))
-                            {
-                                fileDeaths++;
-                            }
+                        aggregatedResult.Positions.AddRange(fileResult.Positions);
+                        aggregatedResult.ZombieDeaths += fileResult.ZombieDeaths;
+                        aggregatedResult.MeleeDeaths += fileResult.MeleeDeaths;
+                        aggregatedResult.GunDeaths += fileResult.GunDeaths;
+                        aggregatedResult.SuicidesOrOtherDeaths += fileResult.SuicidesOrOtherDeaths;
+                        aggregatedResult.FurthestKillDistance = Math.Max(aggregatedResult.FurthestKillDistance, fileResult.FurthestKillDistance);
+                        aggregatedResult.PositionsOutOfBounds += fileResult.PositionsOutOfBounds;
+                        aggregatedResult.LinesProcessed += fileResult.LinesProcessed;
 
-                            if (fileProcessor.ShouldIncludePositionForHeatmap(line, "all", out float weight))
-                            {
-                                if (fileProcessor.TryExtractPosition(line, out float posX, out float posY))
-                                {
-                                    if (fileProcessor.IsPositionWithinBounds(posX, posY, resolvedMapSize))
-                                    {
-                                        filePositions.Add(new DeathPosition { X = posX, Y = posY, Weight = weight });
-                                    }
-                                    else
-                                    {
-                                        outOfBoundsPositions++;
-                                    }
-                                }
-                            }
-                        }
-                        
-                        positions.AddRange(filePositions);
-                        totalActualDeaths += fileDeaths;
-                        _logger.LogInformation("Processed file {FileName}: Found {FileDeaths} deaths, added {FilePositionsCount} positions for map.", 
-                            file.FileName, fileDeaths, filePositions.Count);
+                        _logger.LogInformation("Processed file {FileName}: Added {FilePositionsCount} positions, counted stats.", file.FileName, fileResult.Positions.Count);
                     }
                     catch (Exception ex)
                     {
@@ -138,41 +108,50 @@ namespace HeatMapAPI.Services
                 }
             }
 
-            if (positions.Count == 0 && totalActualDeaths == 0)
+            if (aggregatedResult.Positions.Count == 0)
             {
-                return new HeatmapResponse 
-                { 
-                    Success = false, 
-                    ErrorMessage = "No valid death positions or death events found in the provided files" 
+                string errorMessage = aggregatedResult.TotalDeaths > 0
+                    ? $"No valid positions found for map generation, although {aggregatedResult.TotalDeaths} death events were counted (check map bounds and filters)."
+                    : "No valid death positions or death events found in the provided files.";
+                _logger.LogWarning(errorMessage);
+                return new HeatmapResponse
+                {
+                    Success = false,
+                    ErrorMessage = errorMessage,
+                    ZombieDeaths = aggregatedResult.ZombieDeaths,
+                    MeleeDeaths = aggregatedResult.MeleeDeaths,
+                    GunDeaths = aggregatedResult.GunDeaths,
+                    SuicidesOrOtherDeaths = aggregatedResult.SuicidesOrOtherDeaths,
+                    FurthestKillDistance = aggregatedResult.FurthestKillDistance,
+                    TotalDeaths = aggregatedResult.TotalDeaths,
+                    PositionsOutOfBounds = aggregatedResult.PositionsOutOfBounds,
+                    LinesProcessed = aggregatedResult.LinesProcessed
                 };
-            }
-            else if (positions.Count == 0)
-            {
-                _logger.LogWarning("No positions were added for map generation, although {ActualDeaths} death events were counted.", totalActualDeaths);
-                return new HeatmapResponse { Success = false, ErrorMessage = "No valid positions found for map generation." };
-            }
-            else if (totalActualDeaths == 0)
-            {
-                _logger.LogWarning("No actual death events were counted, although {PositionCount} positions were added for map generation.", positions.Count);
             }
 
             byte[] imageData;
             if (config.OutputType.ToLower() == "heat")
             {
-                imageData = await GenerateHeatmapImageAsync(positions, config);
+                imageData = await GenerateHeatmapImageAsync(aggregatedResult.Positions, config);
             }
             else
             {
-                imageData = await GeneratePixelMapImageAsync(positions, config);
+                imageData = await GeneratePixelMapImageAsync(aggregatedResult.Positions, config);
             }
 
             return new HeatmapResponse 
             { 
                 Success = true, 
                 ImageData = imageData,
-                TotalDeaths = totalActualDeaths,
-                OutOfBoundsDeaths = outOfBoundsPositions,
-                ImageFormat = "png"
+                ImageFormat = "png",
+                ZombieDeaths = aggregatedResult.ZombieDeaths,
+                MeleeDeaths = aggregatedResult.MeleeDeaths,
+                GunDeaths = aggregatedResult.GunDeaths,
+                SuicidesOrOtherDeaths = aggregatedResult.SuicidesOrOtherDeaths,
+                FurthestKillDistance = aggregatedResult.FurthestKillDistance,
+                TotalDeaths = aggregatedResult.TotalDeaths,
+                PositionsOutOfBounds = aggregatedResult.PositionsOutOfBounds,
+                LinesProcessed = aggregatedResult.LinesProcessed
             };
         }
 
@@ -210,34 +189,53 @@ namespace HeatMapAPI.Services
                 };
             }
 
-            var positions = await _fileProcessingService.ProcessAdminLogDirectoryAsync(
-                directoryPath, resolvedMapSize, "all");
+            var aggregatedResult = await _fileProcessingService.ProcessAdminLogDirectoryAsync(
+                directoryPath, resolvedMapSize, config.OutputContent ?? "all");
 
-            if (positions.Count == 0)
+            if (aggregatedResult.Positions.Count == 0)
             {
-                return new HeatmapResponse 
-                { 
-                    Success = false, 
-                    ErrorMessage = "No valid death positions found in the directory" 
+                string errorMessage = aggregatedResult.TotalDeaths > 0
+                    ? $"No valid positions found for map generation in directory {directoryPath}, although {aggregatedResult.TotalDeaths} death events were counted (check map bounds and filters)."
+                    : $"No valid death positions or death events found in the directory {directoryPath}.";
+                _logger.LogWarning(errorMessage);
+                return new HeatmapResponse
+                {
+                    Success = false,
+                    ErrorMessage = errorMessage,
+                    ZombieDeaths = aggregatedResult.ZombieDeaths,
+                    MeleeDeaths = aggregatedResult.MeleeDeaths,
+                    GunDeaths = aggregatedResult.GunDeaths,
+                    SuicidesOrOtherDeaths = aggregatedResult.SuicidesOrOtherDeaths,
+                    FurthestKillDistance = aggregatedResult.FurthestKillDistance,
+                    TotalDeaths = aggregatedResult.TotalDeaths,
+                    PositionsOutOfBounds = aggregatedResult.PositionsOutOfBounds,
+                    LinesProcessed = aggregatedResult.LinesProcessed
                 };
             }
 
             byte[] imageData;
             if (config.OutputType.ToLower() == "heat")
             {
-                imageData = await GenerateHeatmapImageAsync(positions, config);
+                imageData = await GenerateHeatmapImageAsync(aggregatedResult.Positions, config);
             }
             else
             {
-                imageData = await GeneratePixelMapImageAsync(positions, config);
+                imageData = await GeneratePixelMapImageAsync(aggregatedResult.Positions, config);
             }
 
             return new HeatmapResponse 
             { 
                 Success = true, 
                 ImageData = imageData,
-                TotalDeaths = positions.Count,
-                ImageFormat = "png"
+                ImageFormat = "png",
+                ZombieDeaths = aggregatedResult.ZombieDeaths,
+                MeleeDeaths = aggregatedResult.MeleeDeaths,
+                GunDeaths = aggregatedResult.GunDeaths,
+                SuicidesOrOtherDeaths = aggregatedResult.SuicidesOrOtherDeaths,
+                FurthestKillDistance = aggregatedResult.FurthestKillDistance,
+                TotalDeaths = aggregatedResult.TotalDeaths,
+                PositionsOutOfBounds = aggregatedResult.PositionsOutOfBounds,
+                LinesProcessed = aggregatedResult.LinesProcessed
             };
         }
 

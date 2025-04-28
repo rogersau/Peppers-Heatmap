@@ -12,70 +12,105 @@ namespace HeatMapAPI.Services
             _logger = logger;
         }
 
-        // This method now primarily focuses on returning positions for the map.
-        // The accurate death count logic is handled separately or within the calling service.
-        public async Task<List<DeathPosition>> ProcessAdminLogFileAsync(Stream fileStream, int mapSize, string outputContent)
+        // Updated to return AdminLogProcessingResult
+        public async Task<AdminLogProcessingResult> ProcessAdminLogFileAsync(Stream fileStream, int mapSize, string outputContent)
         {
-            List<DeathPosition> positions = new List<DeathPosition>();
-            int outsideBounds = 0;
-            int linesProcessedForPosition = 0;
+            var result = new AdminLogProcessingResult();
 
             using StreamReader reader = new StreamReader(fileStream);
             string? line;
             while ((line = await reader.ReadLineAsync()) != null)
             {
-                // Use ShouldIncludePositionForHeatmap to decide if a position should be added for the map
-                if (ShouldIncludePositionForHeatmap(line, outputContent, out float weight))
+                result.LinesProcessed++;
+
+                // Categorize the death first
+                var deathCategory = CategorizeDeath(line, out float distance);
+
+                // Update furthest kill distance if applicable
+                if (deathCategory == DeathCategory.Gun && distance > result.FurthestKillDistance)
+                {
+                    result.FurthestKillDistance = distance;
+                }
+
+                // Determine if the position should be included based on the category and outputContent filter
+                if (ShouldIncludePositionForHeatmap(line, outputContent, deathCategory, out float weight))
                 {
                     if (TryExtractPosition(line, out float posX, out float posY))
                     {
-                        linesProcessedForPosition++;
                         if (IsPositionWithinBounds(posX, posY, mapSize))
                         {
-                            positions.Add(new DeathPosition { X = posX, Y = posY, Weight = weight });
+                            result.Positions.Add(new DeathPosition { X = posX, Y = posY, Weight = weight });
                         }
                         else
                         {
-                            outsideBounds++;
+                            result.PositionsOutOfBounds++;
                         }
                     }
                 }
+
+                // Increment death counters based on category, regardless of heatmap inclusion or bounds
+                switch (deathCategory)
+                {
+                    case DeathCategory.Zombie:
+                        result.ZombieDeaths++;
+                        break;
+                    case DeathCategory.Melee:
+                        result.MeleeDeaths++;
+                        break;
+                    case DeathCategory.Gun:
+                        result.GunDeaths++;
+                        break;
+                    case DeathCategory.SuicideOrOther:
+                        result.SuicidesOrOtherDeaths++;
+                        break;
+                }
             }
 
-            _logger.LogInformation("Processed file for map positions: Added {PositionCount} positions ({OutOfBounds} out of bounds).", 
-                positions.Count, outsideBounds);
-            
-            return positions;
+            _logger.LogInformation(
+                "Processed file for map positions: Added {PositionCount} positions ({OutOfBounds} out of bounds). Deaths - Zombie: {ZombieDeaths}, Melee: {MeleeDeaths}, Gun: {GunDeaths}, Suicide/Other: {SuicideDeaths}. Furthest Kill: {FurthestKill}m. Total Lines: {TotalLines}",
+                result.Positions.Count, result.PositionsOutOfBounds, result.ZombieDeaths, result.MeleeDeaths, result.GunDeaths, result.SuicidesOrOtherDeaths, result.FurthestKillDistance, result.LinesProcessed);
+
+            return result;
         }
 
-        public async Task<List<DeathPosition>> ProcessAdminLogDirectoryAsync(string directoryPath, int mapSize, string outputContent)
+        // Updated to return and aggregate AdminLogProcessingResult
+        public async Task<AdminLogProcessingResult> ProcessAdminLogDirectoryAsync(string directoryPath, int mapSize, string outputContent)
         {
-            List<DeathPosition> allPositions = new List<DeathPosition>(); // Renamed to avoid confusion
-            
+            var aggregatedResult = new AdminLogProcessingResult();
+
             if (!Directory.Exists(directoryPath))
             {
                 _logger.LogWarning("Directory doesn't exist: {DirectoryPath}", directoryPath);
-                return allPositions;
+                return aggregatedResult;
             }
-            
+
             string[] files = Directory.GetFiles(directoryPath, "*.ADM", SearchOption.AllDirectories);
             foreach (string fileName in files)
             {
                 try
                 {
                     using FileStream fileStream = new FileStream(fileName, FileMode.Open, FileAccess.Read);
-                    // ProcessAdminLogFileAsync now only returns positions for the map
-                    var filePositions = await ProcessAdminLogFileAsync(fileStream, mapSize, outputContent);
-                    allPositions.AddRange(filePositions);
-                    _logger.LogInformation("Processed file {Filename} for map positions.", fileName);
+                    var fileResult = await ProcessAdminLogFileAsync(fileStream, mapSize, outputContent);
+
+                    // Aggregate results
+                    aggregatedResult.Positions.AddRange(fileResult.Positions);
+                    aggregatedResult.ZombieDeaths += fileResult.ZombieDeaths;
+                    aggregatedResult.MeleeDeaths += fileResult.MeleeDeaths;
+                    aggregatedResult.GunDeaths += fileResult.GunDeaths;
+                    aggregatedResult.SuicidesOrOtherDeaths += fileResult.SuicidesOrOtherDeaths;
+                    aggregatedResult.FurthestKillDistance = Math.Max(aggregatedResult.FurthestKillDistance, fileResult.FurthestKillDistance);
+                    aggregatedResult.PositionsOutOfBounds += fileResult.PositionsOutOfBounds;
+                    aggregatedResult.LinesProcessed += fileResult.LinesProcessed;
+
+                    _logger.LogInformation("Processed file {Filename} for map positions and stats.", fileName);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error processing file {Filename} for map positions.", fileName);
+                    _logger.LogError(ex, "Error processing file {Filename} for map positions and stats.", fileName);
                 }
             }
-            
-            return allPositions;
+
+            return aggregatedResult;
         }
 
         public async Task<Dictionary<string, List<PlayerPosition>>> ProcessPlayerPositionsFromFileAsync(Stream fileStream, int mapSize)
@@ -194,43 +229,34 @@ namespace HeatMapAPI.Services
         }
 
         /// <summary>
-        /// Checks if a log line represents an actual player death event (killed or died).
-        /// More specific than ShouldProcessLine, intended only for accurate death counting.
-        /// Made internal to be accessible by DeathMapService.
+        /// Categorizes the type of death based on the log line content.
         /// </summary>
-        internal bool IsActualDeathEvent(string line)
+        /// <param name="line">The log line.</param>
+        /// <param name="distance">Outputs the kill distance if it's a gun kill, otherwise 0.</param>
+        /// <returns>The category of death.</returns>
+        internal DeathCategory CategorizeDeath(string line, out float distance)
         {
-            // Ignore chat lines
+            distance = 0.0f;
+
+            // Ignore chat lines immediately
             if (line.Trim().StartsWith("CHAT:", StringComparison.OrdinalIgnoreCase))
             {
-                return false;
+                return DeathCategory.None;
             }
 
-            // Check for specific death patterns
-            bool isKill = line.Contains(" killed by "); // Covers player and zombie kills
-            bool isSuicideOrOther = line.Contains(" died. Stats>"); 
+            bool isKill = line.Contains("killed by");
+            bool isSuicideOrOther = line.Contains("died. Stats>");
+            bool isZombieKill = line.Contains("killed by Zmb");
+            bool hasDistance = line.Contains(" from ") && line.Contains(" meters");
 
-            // Ensure it looks like a player event line (often contains "Player \"...")
-            // This helps avoid accidental matches in other log types.
-            bool looksLikePlayerEvent = line.Contains("Player \""); 
-
-            return looksLikePlayerEvent && (isKill || isSuicideOrOther);
-        }
-
-        // Renamed from ShouldProcessLine for clarity - this determines if a line contributes a position to the heatmap
-        // Made internal to be accessible by DeathMapService.
-        internal bool ShouldIncludePositionForHeatmap(string line, string outputContent, out float weight)
-        {
-            // Default weight
-            weight = 1.00f;
-    
-            // Check for zombie/infected kills first (weight 0.25)
-            if (line.Contains("killed by Zmb"))
+            // Check for Zombie kill first
+            if (isZombieKill)
             {
-                weight = 0.25f;
+                return DeathCategory.Zombie;
             }
-            // Then check for kills involving meters
-            else if (line.Contains("killed by") && line.Contains(" from ") && line.Contains(" meters"))
+
+            // Check for Gun kill (has distance)
+            if (isKill && hasDistance)
             {
                 try
                 {
@@ -239,62 +265,114 @@ namespace HeatMapAPI.Services
                     if (fromIndex != -1 && metersIndex > fromIndex)
                     {
                         string distanceString = line.Substring(fromIndex + 6, metersIndex - (fromIndex + 6)).Trim();
-                        if (float.TryParse(distanceString, NumberStyles.Any, CultureInfo.InvariantCulture, out float distance))
+                        if (float.TryParse(distanceString, NumberStyles.Any, CultureInfo.InvariantCulture, out distance))
                         {
-                            if (distance > 25.0f)
-                            {
-                                weight = 100.0f; // Higher weight for long-distance kills
-                            }
-                            else
-                            {
-                                weight = 50.0f; // Lower weight for short-distance kills
-                            }
+                            // Successfully parsed distance
+                            return DeathCategory.Gun;
                         }
-                        else
-                        {
-                            // Couldn't parse distance, use default player kill weight
-                            weight = 50.0f; // Changed from 3.0f to be consistent
-                        }
-                    }
-                    else
-                    {
-                        // Fallback if parsing fails, treat as a regular player kill
-                        weight = 50.0f;
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error parsing distance from log line: {LogLine}", line);
-                    weight = 50.0f; // Fallback weight on error
+                    _logger.LogError(ex, "Error parsing distance for categorization from log line: {LogLine}", line);
+                    // Fallback to Melee if distance parsing fails but it's a kill
+                    return DeathCategory.Melee;
                 }
+                // If it looks like a gun kill but parsing failed, categorize as Melee
+                return DeathCategory.Melee;
             }
-            // Handle other player kills or deaths not involving specific distance
-            else if (line.Contains("killed by") || line.Contains("died. Stats>"))
+
+            // Check for Melee kill (player kill without distance)
+            if (isKill && !isZombieKill && !hasDistance) // Ensure it's not a zombie kill we missed and no distance
             {
-                // Use a moderate weight for unspecified player kills or suicides/other deaths
-                weight = 50.0f; 
+                return DeathCategory.Melee;
             }
-            else 
+
+            // Check for Suicide or other deaths
+            if (isSuicideOrOther)
             {
-                // If none of the above death-related keywords match, assign zero weight 
-                // and don't include it based on keywords alone.
-                weight = 0;
-                return false; 
+                return DeathCategory.SuicideOrOther;
             }
-    
-            // --- Filter based on outputContent --- (Note: outputContent is less relevant now for position inclusion)
-            // This filtering might need reconsideration based on desired map output.
-            // For now, let's assume 'all' includes any line that got a non-zero weight above.
-            if (outputContent.ToLower() == "infected")
+
+            // If none of the above, it's not a death event we track
+            return DeathCategory.None;
+        }
+
+        // Updated to use DeathCategory and assign weights based on it.
+        internal bool ShouldIncludePositionForHeatmap(string line, string outputContent, DeathCategory category, out float weight)
+        {
+            weight = 0f; // Default to zero weight, meaning don't include
+
+            // Assign weight based on category
+            switch (category)
             {
-                // Only include zombie kills in infected mode
-                return line.Contains("killed by Zmb");
+                case DeathCategory.Zombie:
+                    weight = 0.25f;
+                    break;
+                case DeathCategory.Melee:
+                    weight = 50.0f; // Standard weight for close-quarters player kill
+                    break;
+                case DeathCategory.Gun:
+                    // Extract distance again for weighting (could optimize later if needed)
+                    if (TryExtractDistance(line, out float distance))
+                    {
+                         weight = (distance > 25.0f) ? 100.0f : 50.0f; // Higher for long range
+                    }
+                    else
+                    {
+                        weight = 50.0f; // Fallback if distance extraction fails here
+                    }
+                    break;
+                case DeathCategory.SuicideOrOther:
+                    weight = 50.0f; // Same weight as melee/standard kill
+                    break;
+                case DeathCategory.None:
+                default:
+                    return false; // Don't include non-death events
+            }
+
+            // --- Filter based on outputContent ---
+            bool includeBasedOnContent = false;
+            string lowerOutputContent = outputContent.ToLower();
+
+            if (lowerOutputContent == "infected")
+            {
+                includeBasedOnContent = (category == DeathCategory.Zombie);
+            }
+            else if (lowerOutputContent == "pvp") // Added PvP filter
+            {
+                 includeBasedOnContent = (category == DeathCategory.Melee || category == DeathCategory.Gun);
             }
             else // Default ("all" or unspecified)
             {
-                // Include if any weight was assigned (meaning it matched one of the death keywords)
-                return weight > 0; 
+                includeBasedOnContent = (category != DeathCategory.None); // Include any categorized death
             }
+
+            return includeBasedOnContent && weight > 0;
+        }
+
+        // Helper to extract distance, used in ShouldIncludePositionForHeatmap
+        internal bool TryExtractDistance(string line, out float distance)
+        {
+            distance = 0.0f;
+            try
+            {
+                int fromIndex = line.LastIndexOf(" from ");
+                int metersIndex = line.LastIndexOf(" meters");
+                if (fromIndex != -1 && metersIndex > fromIndex)
+                {
+                    string distanceString = line.Substring(fromIndex + 6, metersIndex - (fromIndex + 6)).Trim();
+                    if (float.TryParse(distanceString, NumberStyles.Any, CultureInfo.InvariantCulture, out distance))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                 _logger.LogWarning(ex, "Could not parse distance from line for weighting: {LogLine}", line);
+            }
+            return false;
         }
 
         // Made internal
