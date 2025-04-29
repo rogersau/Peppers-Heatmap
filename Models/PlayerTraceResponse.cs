@@ -12,6 +12,7 @@ namespace HeatMapAPI.Models
         
         public int TotalPlayers { get; set; }
         public int TotalPositions { get; set; }
+        public int LinesProcessed { get; set; } // Added to track processed lines
         public bool Success { get; set; }
         public string? ErrorMessage { get; set; }
     }

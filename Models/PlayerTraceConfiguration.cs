@@ -24,6 +24,12 @@ namespace HeatMapAPI.Models
         public IFormFile? BackgroundImage { get; set; }
 
         /// <summary>
+        /// The ID of the player to trace.
+        /// </summary>
+        [DefaultValue("")]
+        public string PlayerId { get; set; } = string.Empty;
+
+        /// <summary>
         /// Line thickness for player traces.
         /// </summary>
         [DefaultValue(1)]

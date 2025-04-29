@@ -35,7 +35,11 @@ builder.Services.AddSwaggerGen(options =>
 // Register DeathMap services
 builder.Services.AddScoped<IFileProcessingService, FileProcessingService>();
 builder.Services.AddScoped<IDeathMapService, DeathMapService>();
-builder.Services.AddScoped<IPlayerTraceService, PlayerTraceService>(); // Add this line
+builder.Services.AddScoped<IPlayerTraceService, PlayerTraceService>();
+builder.Services.AddScoped<IDiscordWebhookService, DiscordWebhookService>(); // Add Discord service
+
+// Add HttpClientFactory for making HTTP requests (used by DiscordWebhookService)
+builder.Services.AddHttpClient();
 
 // Add System.Drawing.Common compatibility for Linux
 if (OperatingSystem.IsLinux())
