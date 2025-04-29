@@ -4,14 +4,14 @@ WORKDIR /source
 
 # Copy the project files into the container
 COPY *.sln .
-COPY HeatMapAPI/*.csproj ./HeatMapAPI/
+COPY *.csproj ./HeatMapAPI/
 # Add other projects if you have them
 
 # Restore dependencies for all projects
 RUN dotnet restore
 
 # Copy the rest of the source code
-COPY HeatMapAPI/. ./HeatMapAPI/
+COPY . . # Adjusted to copy all files from the current folder
 
 # Build and publish the main application
 WORKDIR /source/HeatMapAPI
@@ -23,12 +23,9 @@ WORKDIR /app
 COPY --from=build /app/publish .
 
 # Expose the port the application runs on (default is 8080 for ASP.NET Core in containers)
-# If your app runs on a different port, update this and potentially the ASPNETCORE_URLS environment variable
 EXPOSE 8080
-# EXPOSE 80 # Uncomment if you need port 80
 
 # Set environment variables (optional, can be overridden at runtime)
-# ENV ASPNETCORE_URLS=http://+:80
 ENV ENABLE_SWAGGER=false
 
 # Define the entry point for the container
