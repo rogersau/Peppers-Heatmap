@@ -32,7 +32,7 @@ EXPOSE 8080
 
 # Set environment variables (optional, can be overridden at runtime)
 # ENV ASPNETCORE_URLS=http://+:80
-ENV ENABLE_SWAGGER=false # Default to false, override when running the container
+ENV ENABLE_SWAGGER=false
 
 # Define the entry point for the container
 ENTRYPOINT ["dotnet", "HeatMapAPI.dll"]

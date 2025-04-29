@@ -3,7 +3,7 @@ name: Build and Deploy API to Azure Web App
 on:
   push:
     branches:
-      - main # Trigger deployment on push to the main branch
+      - Public-Main # Trigger deployment on push to the main branch
   workflow_dispatch: # Allow manual triggering
 
 env:
