@@ -5,7 +5,6 @@ WORKDIR /source
 # Copy the project files into the container
 COPY *.sln .
 COPY HeatMapAPI/*.csproj ./HeatMapAPI/
-COPY HeatMapAPI.Tests/*.csproj ./HeatMapAPI.Tests/
 # Add other projects if you have them
 
 # Restore dependencies for all projects
@@ -13,8 +12,6 @@ RUN dotnet restore
 
 # Copy the rest of the source code
 COPY HeatMapAPI/. ./HeatMapAPI/
-COPY HeatMapAPI.Tests/. ./HeatMapAPI.Tests/
-# Add other projects if you have them
 
 # Build and publish the main application
 WORKDIR /source/HeatMapAPI
