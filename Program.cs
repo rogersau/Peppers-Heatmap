@@ -51,10 +51,21 @@ if (OperatingSystem.IsLinux())
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+// Check for environment variable to enable Swagger in production/docker
+var enableSwaggerEnvVar = Environment.GetEnvironmentVariable("ENABLE_SWAGGER");
+bool enableSwagger = app.Environment.IsDevelopment() || 
+                     (bool.TryParse(enableSwaggerEnvVar, out var enable) && enable);
+
+if (enableSwagger)
 {
     app.UseSwagger();
-    app.UseSwaggerUI();
+    app.UseSwaggerUI(c =>
+    {
+        // Set the Swagger endpoint URL. If running behind a reverse proxy with a path base, adjust accordingly.
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "DayZ Heatmap API V1");
+        // Serve Swagger UI at the app's root (e.g., http://localhost:<port>/)
+        c.RoutePrefix = string.Empty; 
+    });
 }
 
 app.UseHttpsRedirection();
