@@ -1,0 +1,81 @@
+name: Build and Deploy API to Azure Web App
+
+on:
+  push:
+    branches:
+      - main # Trigger deployment on push to the main branch
+  workflow_dispatch: # Allow manual triggering
+
+env:
+  # Replace with your actual values or use GitHub environments/secrets
+  AZURE_CONTAINER_REGISTRY_NAME: ${{ secrets.ACR_NAME }} 
+  AZURE_WEBAPP_NAME: ${{ secrets.WEBAPP_NAME }}
+  AZURE_RESOURCE_GROUP: ${{ secrets.RESOURCE_GROUP }}
+  IMAGE_NAME: heatmapapi # Name of the docker image
+
+jobs:
+  build_and_push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Log in to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Log in to Azure Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.AZURE_CONTAINER_REGISTRY_NAME }}
+        # Use the Azure credentials obtained from the azure/login step
+        username: ${{ steps.login.outputs.username }} 
+        password: ${{ steps.login.outputs.password }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: . # Build context is the root of the repository
+        file: ./Dockerfile # Path to the Dockerfile
+        push: true
+        tags: |
+          ${{ env.AZURE_CONTAINER_REGISTRY_NAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          ${{ env.AZURE_CONTAINER_REGISTRY_NAME }}/${{ env.IMAGE_NAME }}:latest
+        # Add build arguments if needed, e.g., for secrets during build
+        # build-args: |
+        #   MY_SECRET=${{ secrets.MY_BUILD_SECRET }}
+
+  deploy:
+    name: Deploy to Azure Web App
+    needs: build_and_push # Run only after the image is built and pushed
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Log in to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Deploy to Azure Web App for Containers
+      uses: azure/webapps-deploy@v3
+      with:
+        app-name: ${{ env.AZURE_WEBAPP_NAME }}
+        resource-group-name: ${{ env.AZURE_RESOURCE_GROUP }}
+        images: '${{ env.AZURE_CONTAINER_REGISTRY_NAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}'
+        # Optional: Add App Settings if needed, e.g., to enable Swagger
+        # configuration-settings: |
+        #   [
+        #     {"name": "ENABLE_SWAGGER", "value": "true", "slotSetting": false},
+        #     {"name": "WEBSITES_PORT", "value": "8080", "slotSetting": false} 
+        #   ]
+
+    - name: Log out from Azure
+      # Optional: Logout after deployment is complete
+      run: |
+        az logout
+        az cache purge
+        az account clear
+      if: always() # Ensure logout runs even if previous steps fail
