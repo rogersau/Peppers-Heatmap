@@ -15,7 +15,6 @@ RUN dotnet restore HeatMapAPI.sln
 COPY Controllers ./Controllers/
 COPY Converters ./Converters/
 COPY Helpers ./Helpers/
-COPY Maps ./Maps/
 COPY Models ./Models/
 COPY Properties ./Properties/
 COPY Services ./Services/
